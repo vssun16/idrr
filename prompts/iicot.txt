@@ -1,0 +1,17 @@
+Instruction: The task is to determine the conjunction that connects two given text fragments and identify whether they have a temporal, comparative, contingency, or extensional relationship. This analysis should consider both implicit and explicit relation sense. The expected output format is: "type-conjunction-relationship".
+
+Example 1-
+Input: Text fragment1: "there's a satisfaction in going against the rules" Text fragment1: "he means the rule that a player can't cut it after a certain age" 
+Output: implicit-in the end-extension
+Example 2-
+Input: Text fragment1: "that prevents the production of pollen" Text fragment1: "the gene can prevent a plant from fertilizing itself" 
+Output: implicit-thus-contingency
+Example 3-
+Input: Text fragment1: "he was heralded by a trumpet fanfare" Text fragment1: "the judge marched down the center aisle in his flowing black robe" 
+Output: implicit-as-temporal
+Example 4-
+Input: Text fragment1: "however, the maximum coupon at which the notes can be reset is 16 1/4%" Text fragment1: "the minimum coupon is 13 3/4%" 
+Output: implicit-while-comparison
+
+Input:Text fragment 1: "<Arg1>" Text fragment 2: "<Arg2>",
+Output: 
