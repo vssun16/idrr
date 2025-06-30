@@ -1,19 +1,20 @@
 from IDRR_data import IDRRDataFrames
 
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
+import json
 import numpy as np
 import pandas as pd
 from pathlib import Path as path
 from typing import Dict
 from sklearn.metrics import f1_score, accuracy_score
 from torch.utils.data import Dataset
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, DataCollatorWithPadding, Seq2SeqTrainingArguments
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, DataCollatorForSeq2Seq, Seq2SeqTrainingArguments
 from transformers import Seq2SeqTrainer, TrainerCallback, TrainerState, TrainerControl
 
+from utils.mylogger import logger
 from utils.utils import read_file
 
-# 设置可见的GPU设备
-os.environ["CUDA_VISIBLE_DEVICES"] = '6,7'
 
 # 获取当前文件所在的目录和根目录
 SRC_DIR = path(os.getcwd())
@@ -22,8 +23,12 @@ PROMPT = '\n'.join(read_file(r'/data/whsun/idrr/prompts/iicot.txt'))
 SEED = 42
 MODEL_NAME = 'flan-t5-base'
 EPOCH = 5
-EXP_ID = 2
-OUTPUT_DIR = f'results/generate/{MODEL_NAME}/epo{EPOCH}/{EXP_ID}'
+# 1. no weight_decay 
+# 2. 0% explicit, 100% implicit
+# 3. filter explicit, 100% implicit
+# 4. 56% explicit, 100% implicit
+EXP_ID = 4
+OUTPUT_DIR = f'expts/generate/{MODEL_NAME}/epo{EPOCH}/{EXP_ID}'
 
 batch_size = 16
 learning_rate = 5.0e-5
@@ -151,33 +156,111 @@ class ComputeMetrics:
         
         # 计算指标
         res = {
-            'Macro-F1': f1_score(onehot_labels, onehot_preds, average='macro', zero_division=0),
+            'Macro-F1': f1_score(onehot_labels, onehot_preds, average='macro', zero_division="warn"),
             'Acc': np.sum(onehot_preds * onehot_labels) / len(onehot_preds),
         } 
         return res
 
-# TODO === callback ===
+# === callback ===
 class CustomCallback(TrainerCallback):
     def __init__(
         self, 
         log_filepath=None,
+        test_dataset=None,
+        trainer=None,
     ):
         super().__init__()
         if log_filepath:
             self.log_filepath = log_filepath
         else:
             self.log_filepath = path(OUTPUT_DIR) / 'log.jsonl'
+        
+        self.test_dataset = test_dataset
+        self.trainer = trainer
+        self.best_dev_score = -1
+        self.best_epoch = 0
+        self.epoch_results = []
+        self._evaluating_test = False  # 添加标志防止递归
     
     def on_step_begin(self, args, state, control, **kwargs):
-        # print(args, state, control, kwargs)
         return super().on_step_begin(args, state, control, **kwargs)
 
     def on_log(self, args: Seq2SeqTrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        with open(self.log_filepath, 'a', encoding='utf8')as f:
+        with open(self.log_filepath, 'a', encoding='utf8') as f:
             f.write(str(kwargs['logs'])+'\n')
 
     def on_evaluate(self, args, state, control, metrics:Dict[str, float], **kwargs):
-        pass
+        # 防止递归调用
+        if self._evaluating_test:
+            return
+            
+        # 只在开发集评估时进行测试集评估
+        if 'eval_' in str(metrics.keys()) and self.test_dataset is not None and self.trainer is not None:
+            logger.info(f"=== Epoch {state.epoch} Evaluation Results ===")
+            logger.info(f"Dev Set - Macro-F1: {metrics.get('eval_Macro-F1', 0):.4f}, Acc: {metrics.get('eval_Acc', 0):.4f}")
+            
+            # 设置标志并在测试集上评估
+            self._evaluating_test = True
+            try:
+                test_metrics = self.trainer.evaluate(eval_dataset=self.test_dataset, metric_key_prefix="test")
+                logger.info(f"Test Set - Macro-F1: {test_metrics.get('test_Macro-F1', 0):.4f}, Acc: {test_metrics.get('test_Acc', 0):.4f}")
+                
+                # 记录本epoch的结果
+                epoch_result = {
+                    'epoch': int(state.epoch),
+                    'dev_macro_f1': metrics.get('eval_Macro-F1', 0),
+                    'dev_acc': metrics.get('eval_Acc', 0),
+                    'test_macro_f1': test_metrics.get('test_Macro-F1', 0),
+                    'test_acc': test_metrics.get('test_Acc', 0),
+                }
+                self.epoch_results.append(epoch_result)
+                
+                # 更新最佳模型
+                current_dev_score = metrics.get('eval_Macro-F1', 0)
+                if current_dev_score > self.best_dev_score:
+                    self.best_dev_score = current_dev_score
+                    self.best_epoch = int(state.epoch)
+                    logger.info(f"*** New best model found at epoch {self.best_epoch} with dev Macro-F1: {self.best_dev_score:.4f} ***")
+                
+                # 保存所有结果到文件
+                results_file = path(OUTPUT_DIR) / 'epoch_results.json'
+                with open(results_file, 'w', encoding='utf8') as f:
+                    json.dump(self.epoch_results, f, indent=2)
+                    
+            finally:
+                # 重置标志
+                self._evaluating_test = False
+                
+    def on_train_end(self, args, state, control, **kwargs):
+        # 训练结束后，汇报最佳结果
+        if self.epoch_results:
+            best_result = None
+            for result in self.epoch_results:
+                if result['epoch'] == self.best_epoch:
+                    best_result = result
+                    break
+            
+            if best_result:
+                logger.info(f"{'='*60}")
+                logger.info(f"FINAL RESULTS - Best model at epoch {self.best_epoch}")
+                logger.info(f"{'='*60}")
+                logger.info(f"Dev Set  - Macro-F1: {best_result['dev_macro_f1']:.4f}, Acc: {best_result['dev_acc']:.4f}")
+                logger.info(f"Test Set - Macro-F1: {best_result['test_macro_f1']:.4f}, Acc: {best_result['test_acc']:.4f}")
+                logger.info(f"{'='*60}")
+                
+                # 保存最终结果
+                final_results = {
+                    'best_epoch': self.best_epoch,
+                    'best_dev_macro_f1': best_result['dev_macro_f1'],
+                    'best_dev_acc': best_result['dev_acc'],
+                    'final_test_macro_f1': best_result['test_macro_f1'],
+                    'final_test_acc': best_result['test_acc'],
+                    'all_epoch_results': self.epoch_results
+                }
+                
+                final_results_file = path(OUTPUT_DIR) / 'final_results.json'
+                with open(final_results_file, 'w', encoding='utf8') as f:
+                    json.dump(final_results, f, indent=2)
 
 # === data ===
 dfs = IDRRDataFrames(
@@ -193,13 +276,27 @@ explicit_dfs = IDRRDataFrames(
     data_path='/data/whsun/idrr/data/raw/pdtb3.p1.csv',
 )
 
+# filter_datas = read_file(r'/data/whsun/idrr/data/filtered_dataset/pdtb3/fine_l1_filtered/ckpt7/train_filtered.jsonl')
+# filter_df = pd.DataFrame(filter_datas)
+# filter_df['conn1'] = filter_df['conn']
+# filter_df['relation'] = filter_df['relation_type']
+# filter_df['label11id'] = filter_df.apply(lambda x: dfs.label_to_id(x['relation_class'].split('.')[0]), axis=1)
+
+# filter_df = filter_df[['arg1', 'arg2', 'conn1', 'relation', 'label11id']]
+# imp_df = dfs.train_df[['arg1', 'arg2', 'conn1', 'relation', 'label11id']]
+
 label_list = dfs.label_list
 
 checkpoint = '/data/whsun/pretrained_models/flan-t5-base'
 tokenizer = AutoTokenizer.from_pretrained(checkpoint)
 
 # 加载训练集、验证集和测试集
-train_dataset = T5Dataset(pd.concat([dfs.train_df, explicit_dfs.train_df]), label_list, tokenizer)
+# train_dataset = T5Dataset(pd.concat([dfs.train_df, explicit_dfs.train_df]), label_list, tokenizer) # 1
+# train_dataset = T5Dataset(dfs.train_df, label_list, tokenizer) # 2
+# train_dataset = T5Dataset(pd.concat([imp_df, filter_df]), label_list, tokenizer) # 3
+explicit_dfs = explicit_dfs.train_df.sample(frac=0.56, random_state=SEED)
+train_dataset = T5Dataset(pd.concat([dfs.train_df, explicit_dfs]), label_list, tokenizer) # 4随机挑选56%的explicit数据
+
 dev_dataset = T5Dataset(dfs.dev_df, label_list, tokenizer)
 test_dataset = T5Dataset(dfs.test_df, label_list, tokenizer)
 model = AutoModelForSeq2SeqLM.from_pretrained(checkpoint)
@@ -208,14 +305,14 @@ model = AutoModelForSeq2SeqLM.from_pretrained(checkpoint)
 training_args = Seq2SeqTrainingArguments(
     output_dir=OUTPUT_DIR,
     overwrite_output_dir=True,
-    run_name='iicot-all-exp',
+    run_name='',
     
     # strategies of evaluation, logging, save
     eval_strategy = "epoch", 
     eval_steps = 1,
     logging_strategy = 'steps',
     logging_steps = 10,
-    # save_strategy = 'steps',
+    save_strategy = 'epoch',
     # save_steps = 500,
     # max_steps=2,
     
@@ -239,22 +336,36 @@ training_args = Seq2SeqTrainingArguments(
 
     # args for Seq2Seq
     predict_with_generate=True,
+    
+    # 保存最佳模型
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_Macro-F1",
+    greater_is_better=True,
 )
+
+# 创建自定义回调
+custom_callback = CustomCallback(test_dataset=test_dataset)
 
 # === train ===
 trainer = Seq2SeqTrainer(
     model=model,
     args=training_args,
-    data_collator=DataCollatorWithPadding(tokenizer),
+    data_collator=DataCollatorForSeq2Seq(tokenizer),
     train_dataset=train_dataset,
     eval_dataset=dev_dataset,
     processing_class=tokenizer,
     compute_metrics=ComputeMetrics(dfs.label_list, tokenizer),
-    callbacks=[CustomCallback()],
+    callbacks=[custom_callback],
 )
 
-# 开始训练和评估
+# 将trainer传递给callback以便评估测试集
+custom_callback.trainer = trainer
+
+logger.info(f"Training dataset size: {len(train_dataset)}")
+logger.info(f"Dev dataset size: {len(dev_dataset)}")
+logger.info(f"Test dataset size: {len(test_dataset)}")
+logger.info(f"Output directory: {OUTPUT_DIR}")
+
+# 开始训练
 train_result = trainer.train()
-test_result = trainer.evaluate(eval_dataset=test_dataset)
-print(f'> train_result:\n  {train_result}')
-print(f'> test_result:\n  {test_result}')
+logger.info(f'> train_result:\n  {train_result}')
