@@ -1,0 +1,16 @@
+### Task
+You are an expert in the field of implicit discourse relations. Your task is to determine the semantic-logical relationship between two given text segments and select the most appropriate relation label.
+
+### Input
+Text segment 1: {arg1}
+Text segment 2: {arg2}
+
+### Relation Definitions
+Relation labels:
+A. **Comparison**: Describes the similarities or differences between two or more arguments, views, or situations. It might highlight their **Contrast** (e.g., juxtaposing opposing characteristics) or introduce a **Concession** (acknowledging one point while introducing a contrary and often more significant point, expressing a contra-expectation or unexpected turn).
+B. **Contingency**: Describes how one event, situation, or argument is a condition or result of another. This includes specifying a **Cause** and its effect, or providing a **Justification** (reason or evidence) for a claim.  
+C. **Expansion**: Extends, elaborates on, or details previously mentioned information. This can be achieved by offering an **Alternative**, simply adding new information through **Conjunction**, enumerating items in a **List**, providing specific **Instantiation** (examples), or **Restatement** (rephrasing the same content in different ways).
+D. **Temporal**: Describes the chronological order or simultaneity of events or states. It specifies whether events occur **Asynchronously** (sequentially, one after another) or in **Synchrony** (at the same time).
+
+### Format Requirements
+Finally, output only {{A, B, C, D}} enclosed in \boxed{{}}.
