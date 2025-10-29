@@ -1,0 +1,42 @@
+### model
+# model_name_or_path: ../pretrained_models/Meta-Llama-3.1-8B-Instruct
+model_name_or_path: ../pretrained_models/Qwen3-0.6B
+
+### method
+stage: sft
+do_train: true
+finetuning_type: full
+seed: 42
+
+### dataset
+dataset: pdtb2_train_baseline_qwen3_cot
+template: qwen3
+cutoff_len: 2048
+# max_samples: 25
+overwrite_cache: true
+preprocessing_num_workers: 16
+
+### output
+output_dir: expt/baseline/qwen3/cot/epo5
+logging_steps: 10
+save_steps: 0.2
+plot_loss: true
+report_to: tensorboard
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 8
+learning_rate: 1.2e-5
+num_train_epochs: 5
+lr_scheduler_type: cosine
+warmup_ratio: 0.01
+# bf16: true
+fp16: true
+ddp_timeout: 180000000
+
+### eval
+# val_size: 0.1
+# per_device_eval_batch_size: 1
+# eval_strategy: steps
+# eval_steps: 500
