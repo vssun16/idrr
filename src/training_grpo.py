@@ -3,14 +3,14 @@
 # See https://github.com/willccbb/verifiers for ongoing developments
 #
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ["WANDB_DISABLED"] = "true"
 
 import re
 import torch
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import LoraConfig
+# from peft import LoraConfig
 from IDRR_data import IDRRDataFrames
 from trl import GRPOConfig, GRPOTrainer
 
@@ -26,7 +26,7 @@ Respond in the following format:
 ...
 </answer>
 """
-SYSTEM_PROMPT = f"You FIRST think about the reasoning process as an internal monologue and then provide the final answer. The reasoning process MUST BE enclosed within <think> </think> tags. The final answer MUST BE put in \\boxed{{}}."
+SYSTEM_PROMPT = r"You FIRST think about the reasoning process as an internal monologue and then provide the final answer. The reasoning process MUST BE enclosed within <think> </think> tags. The final answer MUST BE put in \boxed{}. Example format: <think> ... </think> \boxed{A}."
 
 XML_COT_FORMAT = """\
 <reasoning>
@@ -160,9 +160,9 @@ def boxed_format_reward_func(completions, **kwargs) -> list[float]:
         score = 0.0
         matches = re.findall(pattern, r)
         if matches:
-            score += 0.5
+            score += 0.3
             if matches[-1] in ['A', 'B', 'C', 'D']:
-                score += 0.3
+                score += 0.2
         scores.append(score)
     return scores
 
@@ -184,7 +184,7 @@ training_args = GRPOConfig(
     lr_scheduler_type='cosine',
     logging_steps=1,
     bf16=True,
-    per_device_train_batch_size=4,
+    per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
     num_generations=8,
     max_prompt_length=256,
@@ -195,13 +195,13 @@ training_args = GRPOConfig(
     report_to="swanlab",
     log_on_each_node=False,
 )
-peft_config = LoraConfig(
-    r=16,
-    lora_alpha=64,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"],
-    task_type="CAUSAL_LM",
-    lora_dropout=0.05,
-)
+# peft_config = LoraConfig(
+#     r=16,
+#     lora_alpha=64,
+#     target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"],
+#     task_type="CAUSAL_LM",
+#     lora_dropout=0.05,
+# )
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     torch_dtype=torch.bfloat16,
@@ -218,8 +218,8 @@ trainer = GRPOTrainer(
     processing_class=tokenizer,
     reward_funcs=[
         # xmlcount_reward_func,
-        soft_format_reward_func,
-        strict_format_reward_func,
+        # soft_format_reward_func,
+        # strict_format_reward_func,
         # int_reward_func,
         boxed_format_reward_func,
         correctness_reward_func],
